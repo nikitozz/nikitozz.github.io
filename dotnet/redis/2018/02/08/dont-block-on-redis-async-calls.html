@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Begin Jekyll SEO tag v2.4.0 -->
+<title>Don’t block on async calls to Redis | nikitozz Blog</title>
+<meta name="generator" content="Jekyll v3.7.2" />
+<meta property="og:title" content="Don’t block on async calls to Redis" />
+<meta name="author" content="nikitozz" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Redis, async, await, blocking, deadlock, asynchrony, asynchronous, StackExchange, StackExchange.Redis C#, CLR, .NET, ASP.NET, dotnet, backend development, technology" />
+<meta property="og:description" content="Redis, async, await, blocking, deadlock, asynchrony, asynchronous, StackExchange, StackExchange.Redis C#, CLR, .NET, ASP.NET, dotnet, backend development, technology" />
+<link rel="canonical" href="https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html" />
+<meta property="og:url" content="https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html" />
+<meta property="og:site_name" content="nikitozz Blog" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2018-02-08T22:03:00-05:00" />
+<script type="application/ld+json">
+{"description":"Redis, async, await, blocking, deadlock, asynchrony, asynchronous, StackExchange, StackExchange.Redis C#, CLR, .NET, ASP.NET, dotnet, backend development, technology","author":{"@type":"Person","name":"nikitozz"},"@type":"BlogPosting","url":"https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html","headline":"Don’t block on async calls to Redis","dateModified":"2018-02-08T22:03:00-05:00","datePublished":"2018-02-08T22:03:00-05:00","mainEntityOfPage":{"@type":"WebPage","@id":"https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html"},"@context":"http://schema.org"}</script>
+<!-- End Jekyll SEO tag -->
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <link type="application/atom+xml" rel="alternate" href="https://nikitozz.github.io/feed.xml" title="nikitozz Blog" />
+  
+
+    <!-- Google Analytics -->
+    <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-113768534-1', 'auto');
+	ga('send', 'pageview', { 'page': location.pathname + location.search + location.hash});
+	ga('set', 'anonymizeIp', false);
+    </script>
+    <!-- End Google Analytics -->
+    </head>
+
+
+  <body>
+
+    <header class="site-header" role="banner">
+
+  <div class="wrapper">
+    
+    
+    <a class="site-title" rel="author" href="/">nikitozz Blog</a>
+
+    
+      <nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger" />
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewBox="0 0 18 15" width="18px" height="15px">
+              <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+              <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+              <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+          
+            
+            
+          
+            
+            
+            <a class="page-link" href="/about/">About</a>
+            
+          
+            
+            
+          
+            
+            
+          
+            
+            
+          
+        </div>
+      </nav>
+    
+  </div>
+</header>
+
+
+    <main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Don&#39;t block on async calls to Redis</h1>
+    <p class="post-meta">
+      <time class="dt-published" datetime="2018-02-08T22:03:00-05:00" itemprop="datePublished">
+        
+        Feb 8, 2018
+      </time>
+      </p>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <p>The title sounds pretty obvious, doesn’t it? Blocking on any async calls, not only Redis, is wrong for many many reasons. You can find all about it on the Internet (for example, Stephen Cleary has quite a few <a href="https://blog.stephencleary.com/">great articles on the topic</a>), but the most common are:</p>
+<ol>
+  <li>Blocking defeats the whole purpose of asynchronous programming. We want our threads to be doing stuff, not just waiting for something. This idea is especially actual in today’s cloud-centered world where we have to pay for every minute we use hardware in the cloud.</li>
+  <li>In some application types, like classic ASP.NET, blocking may lead to deadlocks (again, check out Stephen’s Cleary blog). A quick explanation here: by “classic ASP.NET” I mean the full-framework ASP.NET, not to confuse with the classic pipeline in IIS.</li>
+</ol>
+
+<p>So, in an ideal world, we want our applications to be asynchronous from top to bottom. That is, coming back to our ASP.NET application example, all the controllers should be asynchronous. Unfortunately, that is not the world we live in. More often than not we have to work with some old legacy code which might not be “fully” asynchronous. Also, sometimes the language itself makes it difficult to be asynchronous from top to bottom. What if let’s say, I need to call something asynchronously in a constructor or a <code class="highlighter-rouge">Dispose</code> method. Of course, we can debate that I should design my code differently so that such a call is not necessary, but again, not an ideal world.</p>
+
+<p>So this is what happened to me recently. I had to integrate with Redis in some legacy ASP.NET application which was only partially asynchronous, and I used StackExchange.Redis library to connect to my Redis cluster.
+Now, for multiple reasons, I needed to decorate calls to StackExchange.Redis with some functionality. So, to avoid code duplication, I decided to use only async methods from the library, and, consistently, provided only the asynchronous interface in my decorator. Since, as I mentioned above, the code I was working with was not fully asynchronous, the decision was made to carefully block on asynchronous calls to Redis in some rare places where it was necessary.</p>
+
+<p>Here is how such code could’ve looked like.</p>
+
+<figure class="highlight"><pre><code class="language-csharp" data-lang="csharp"><span class="k">public</span> <span class="k">class</span> <span class="nc">RedisDecorator</span>
+<span class="p">{</span>
+  <span class="k">public</span> <span class="k">async</span> <span class="n">Task</span> <span class="nf">SaveAsync</span><span class="p">(</span><span class="kt">string</span> <span class="n">key</span><span class="p">,</span> <span class="kt">string</span> <span class="k">value</span><span class="p">)</span>
+  <span class="p">{</span>
+    <span class="c1">// My custom code here</span>
+    <span class="k">await</span> <span class="n">_redisDb</span><span class="p">.</span><span class="nf">StringSetAsync</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="k">value</span><span class="p">).</span><span class="nf">ConfigureAwait</span><span class="p">(</span><span class="k">false</span><span class="p">);</span>
+  <span class="p">}</span>
+
+  <span class="k">public</span> <span class="k">async</span> <span class="n">Task</span><span class="p">&lt;</span><span class="kt">string</span><span class="p">&gt;</span> <span class="nf">ReadAsync</span><span class="p">(</span><span class="kt">string</span> <span class="n">key</span><span class="p">)</span>
+  <span class="p">{</span>
+    <span class="c1">// My custom code here</span>
+    <span class="k">await</span> <span class="n">_redisDb</span><span class="p">.</span><span class="nf">StringGetAsync</span><span class="p">(</span><span class="n">key</span><span class="p">).</span><span class="nf">ConfigureAwait</span><span class="p">(</span><span class="k">false</span><span class="p">);</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">public</span> <span class="k">class</span> <span class="nc">OldClass</span>
+<span class="p">{</span>
+  <span class="k">private</span> <span class="k">readonly</span> <span class="n">RedisDecorator</span> <span class="n">_decorator</span><span class="p">;</span>
+  
+  <span class="k">public</span> <span class="k">void</span> <span class="nf">SyncOnlyMethod</span><span class="p">()</span>
+  <span class="p">{</span>
+    <span class="c1">// A lot of old code here</span>
+    <span class="n">_decorator</span><span class="p">.</span><span class="nf">SaveAsync</span><span class="p">(</span><span class="n">someKey</span><span class="p">,</span> <span class="n">someValue</span><span class="p">).</span><span class="nf">Wait</span><span class="p">();</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">public</span> <span class="k">class</span> <span class="nc">NewClass</span>
+<span class="p">{</span>
+  <span class="k">private</span> <span class="k">readonly</span> <span class="n">RedisDecorator</span> <span class="n">_decorator</span><span class="p">;</span>
+  <span class="k">private</span> <span class="k">readonly</span> <span class="n">OldClass</span> <span class="n">_oldClass</span><span class="p">;</span>
+
+  <span class="k">public</span> <span class="k">async</span> <span class="n">Task</span> <span class="nf">NewMethodAsync</span><span class="p">()</span>
+  <span class="p">{</span>
+    <span class="c1">// Some code</span>
+    <span class="k">await</span> <span class="n">_decorator</span><span class="p">.</span><span class="nf">SaveAsync</span><span class="p">(</span><span class="n">key1</span><span class="p">,</span> <span class="n">value1</span><span class="p">).</span><span class="nf">ConfigureAwait</span><span class="p">(</span><span class="k">false</span><span class="p">);</span>
+    
+    <span class="c1">// More code</span>
+    <span class="n">_oldClass</span><span class="p">.</span><span class="nf">SyncOnlyMethod</span><span class="p">();</span>
+  <span class="p">}</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Everything was written, verified, and tested locally, it all looked great. But when I deployed my code and started running some load tests, to my genuine surprise the app was stuck somewhere, deadlocked.
+My first reaction was blaming myself for forgetting to add <code class="highlighter-rouge">ConfigureAwait</code> in places where I blocked on async Redis calls (yeah, I’m not a perfect developer). So I went through my code numerous times looking for the missing call, but, hmmm, all of them were in place. As I said, I’m fully aware of why blocking on async calls is wrong (at least I hope I’m) so I was cautious.
+My second thought was, of course, to “blame the compiler.” Well, not the compiler in my case, but the StackExchange library for not calling <code class="highlighter-rouge">ConfigureAwait</code> in some of their async methods. So I dug deeper into their code, realizing again what a great gift GitHub is. But StackExchange did a tremendous job, and all <code class="highlighter-rouge">ConfigureAwait</code>’s seemed to be in place as well.</p>
+
+<p>With a minimal idea what was going on, I took a memory dump of the process only to unsurprisingly discover that the code was deadlocked precisely at the place where I blocked on an async call to Redis (<code class="highlighter-rouge">_decorator.SaveAsync(someKey, someValue).Wait()</code>). But why?</p>
+
+<p>I decided to go through the StackExchange source code more thoroughly, and that’s where everything became clear.</p>
+
+<p>A little disclaimer here: I’m not a Redis expert. Some of the things (or a lot of them) I’m describing here may not be precisely accurate, but the text still should correctly convey the general idea.
+StackExchange.Redis is not exactly a pass-through Redis wrapper. That is, it does not just convert your calls to Redis commands and return results. Instead, it acts as a dispatcher, scheduling your calls for execution, tracking them, and routing the results back.</p>
+
+<p>Here is what happens when you call, let’s say, <code class="highlighter-rouge">StringGetAsync</code> to read something from Redis.</p>
+<ol>
+  <li>The library creates an instance of <code class="highlighter-rouge">TaskCompletionSource</code> (a way to track task completion in C#).</li>
+  <li>The <code class="highlighter-rouge">TaskCompletionSource</code> is wrapped with a so-called result-box: an internal StackExchange entity that is used to route operation results.</li>
+  <li>The library creates a message that describes your request (<code class="highlighter-rouge">StringGetAsync</code> in our case) and pushes it to a queue so that it can be delivered to the Redis server.</li>
+  <li>The library returns you a task associated with the <code class="highlighter-rouge">TaskCompletionSource</code> created in step 1.</li>
+</ol>
+
+<p>For more details how this process works, see <code class="highlighter-rouge">ConnectionMultiplexer.ExecuteAsyncImpl</code> on <a href="https://github.com/StackExchange/StackExchange.Redis/blob/master/StackExchange.Redis/StackExchange/Redis/ConnectionMultiplexer.cs#L1951">GitHub</a>.</p>
+
+<p>All you have to do right now is to await the <code class="highlighter-rouge">Task</code> you received from the <code class="highlighter-rouge">StringGetAsync</code> call. The piece we’re interested now is how StackExchange.Redis completes the <code class="highlighter-rouge">Task</code> and creates a result for you.</p>
+
+<p>Here is how it happens:</p>
+<ol>
+  <li>The library receives a response from the Redis server.</li>
+  <li>The response is posted to a queue so that it can be processed by a dedicated “completion” thread.</li>
+  <li>The dedicated completion thread picks up the response from the queue and tries to find a corresponding result-box.</li>
+  <li>The thread calls TryComplete on the result-box which will ultimately lead to calling <code class="highlighter-rouge">TryComplete</code> on the <code class="highlighter-rouge">TaskCompletionSource</code> that was created at the beginning of your request.</li>
+  <li>The task you were awaiting is now completed.</li>
+</ol>
+
+<p>Seems innocent, right; nothing that can lead to deadlocks.</p>
+
+<p>What’s interesting here is that StackExchange.Redis allows only a single thread for picking up items from the completion queue and completing all the result-boxes. Here is how the code looks like:</p>
+
+<figure class="highlight"><pre><code class="language-csharp" data-lang="csharp"><span class="k">private</span> <span class="k">void</span> <span class="nf">ProcessAsyncCompletionQueueImpl</span><span class="p">()</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">currentThread</span> <span class="p">=</span> <span class="n">Environment</span><span class="p">.</span><span class="n">CurrentManagedThreadId</span><span class="p">;</span>
+  <span class="k">try</span>
+  <span class="p">{</span>
+    <span class="k">while</span> <span class="p">(</span><span class="n">Interlocked</span><span class="p">.</span><span class="nf">CompareExchange</span><span class="p">(</span><span class="k">ref</span> <span class="n">activeAsyncWorkerThread</span><span class="p">,</span> <span class="n">currentThread</span><span class="p">,</span> <span class="m">0</span><span class="p">)</span> <span class="p">!=</span> <span class="m">0</span><span class="p">)</span>
+    <span class="p">{</span>
+      <span class="c1">// if we don't win the lock, check whether there is still work; if there is we</span>
+      <span class="c1">// need to retry to prevent a nasty race condition</span>
+      <span class="k">lock</span><span class="p">(</span><span class="n">asyncCompletionQueue</span><span class="p">)</span>
+      <span class="p">{</span>
+          <span class="k">if</span> <span class="p">(</span><span class="n">asyncCompletionQueue</span><span class="p">.</span><span class="n">Count</span> <span class="p">==</span> <span class="m">0</span><span class="p">)</span> <span class="k">return</span><span class="p">;</span> <span class="c1">// another thread drained it; can exit</span>
+      <span class="p">}</span>
+      <span class="n">Thread</span><span class="p">.</span><span class="nf">Sleep</span><span class="p">(</span><span class="m">1</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="kt">int</span> <span class="n">total</span> <span class="p">=</span> <span class="m">0</span><span class="p">;</span>
+    <span class="k">do</span>
+    <span class="p">{</span>
+      <span class="n">ICompletable</span> <span class="n">next</span><span class="p">;</span>
+      <span class="k">lock</span> <span class="p">(</span><span class="n">asyncCompletionQueue</span><span class="p">)</span>
+      <span class="p">{</span>
+        <span class="n">next</span> <span class="p">=</span> <span class="n">asyncCompletionQueue</span><span class="p">.</span><span class="n">Count</span> <span class="p">==</span> <span class="m">0</span> <span class="p">?</span> <span class="k">null</span>
+          <span class="p">:</span> <span class="n">asyncCompletionQueue</span><span class="p">.</span><span class="nf">Dequeue</span><span class="p">();</span>
+      <span class="p">}</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">next</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span>
+      <span class="p">{</span>
+        <span class="c1">// give it a moment and try again, noting that we might lose the battle</span>
+        <span class="c1">// when we pause</span>
+        <span class="n">Interlocked</span><span class="p">.</span><span class="nf">CompareExchange</span><span class="p">(</span><span class="k">ref</span> <span class="n">activeAsyncWorkerThread</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="n">currentThread</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nf">SpinWait</span><span class="p">()</span> <span class="p">&amp;&amp;</span> <span class="n">Interlocked</span><span class="p">.</span><span class="nf">CompareExchange</span><span class="p">(</span><span class="k">ref</span> <span class="n">activeAsyncWorkerThread</span><span class="p">,</span> <span class="n">currentThread</span><span class="p">,</span> <span class="m">0</span><span class="p">)</span> <span class="p">==</span> <span class="m">0</span><span class="p">)</span>
+        <span class="p">{</span>
+          <span class="c1">// we paused, and we got the lock back; anything else?</span>
+          <span class="k">lock</span> <span class="p">(</span><span class="n">asyncCompletionQueue</span><span class="p">)</span>
+          <span class="p">{</span>
+            <span class="n">next</span> <span class="p">=</span> <span class="n">asyncCompletionQueue</span><span class="p">.</span><span class="n">Count</span> <span class="p">==</span> <span class="m">0</span> <span class="p">?</span> <span class="k">null</span>
+              <span class="p">:</span> <span class="n">asyncCompletionQueue</span><span class="p">.</span><span class="nf">Dequeue</span><span class="p">();</span>
+          <span class="p">}</span>
+        <span class="p">}</span>
+      <span class="p">}</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">next</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span> <span class="k">break</span><span class="p">;</span> <span class="c1">// nothing to do &lt;===== exit point</span>
+      <span class="k">try</span>
+      <span class="p">{</span>
+        <span class="n">multiplexer</span><span class="p">.</span><span class="nf">Trace</span><span class="p">(</span><span class="s">"Completing async (ordered): "</span> <span class="p">+</span> <span class="n">next</span><span class="p">,</span> <span class="n">name</span><span class="p">);</span>
+        <span class="n">next</span><span class="p">.</span><span class="nf">TryComplete</span><span class="p">(</span><span class="k">true</span><span class="p">);</span>
+        <span class="n">Interlocked</span><span class="p">.</span><span class="nf">Increment</span><span class="p">(</span><span class="k">ref</span> <span class="n">completedAsync</span><span class="p">);</span>
+      <span class="p">}</span>
+      <span class="k">catch</span> <span class="p">(</span><span class="n">Exception</span> <span class="n">ex</span><span class="p">)</span>
+      <span class="p">{</span>
+        <span class="n">multiplexer</span><span class="p">.</span><span class="nf">Trace</span><span class="p">(</span><span class="s">"Async completion error: "</span> <span class="p">+</span> <span class="n">ex</span><span class="p">.</span><span class="n">Message</span><span class="p">,</span> <span class="n">name</span><span class="p">);</span>
+        <span class="n">Interlocked</span><span class="p">.</span><span class="nf">Increment</span><span class="p">(</span><span class="k">ref</span> <span class="n">failedAsync</span><span class="p">);</span>
+      <span class="p">}</span>
+      <span class="n">total</span><span class="p">++;</span>
+    <span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="k">true</span><span class="p">);</span>
+    <span class="n">multiplexer</span><span class="p">.</span><span class="nf">Trace</span><span class="p">(</span><span class="s">"Async completion worker processed "</span> <span class="p">+</span> <span class="n">total</span> <span class="p">+</span> <span class="s">" operations"</span><span class="p">,</span> <span class="n">name</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">finally</span>
+  <span class="p">{</span>
+    <span class="n">Interlocked</span><span class="p">.</span><span class="nf">CompareExchange</span><span class="p">(</span><span class="k">ref</span> <span class="n">activeAsyncWorkerThread</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="n">currentThread</span><span class="p">);</span>
+  <span class="p">}</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>As usually, you can check this code out on <a href="https://github.com/StackExchange/StackExchange.Redis/blob/master/StackExchange.Redis/StackExchange/Redis/CompletionManager.cs#L114">GitHub</a>.</p>
+
+<p>This code does a lot of things, but we’re most interested in these two blocks</p>
+
+<figure class="highlight"><pre><code class="language-csharp" data-lang="csharp"><span class="k">while</span> <span class="p">(</span><span class="n">Interlocked</span><span class="p">.</span><span class="nf">CompareExchange</span><span class="p">(</span><span class="k">ref</span> <span class="n">activeAsyncWorkerThread</span><span class="p">,</span> <span class="n">currentThread</span><span class="p">,</span> <span class="m">0</span><span class="p">)</span> <span class="p">!=</span> <span class="m">0</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="c1">// if we don't win the lock, check whether there is still work; if there is we</span>
+  <span class="c1">// need to retry to prevent a nasty race condition</span>
+  <span class="k">lock</span><span class="p">(</span><span class="n">asyncCompletionQueue</span><span class="p">)</span>
+  <span class="p">{</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">asyncCompletionQueue</span><span class="p">.</span><span class="n">Count</span> <span class="p">==</span> <span class="m">0</span><span class="p">)</span> <span class="k">return</span><span class="p">;</span> <span class="c1">// another thread drained it; can exit</span>
+  <span class="p">}</span>
+  <span class="n">Thread</span><span class="p">.</span><span class="nf">Sleep</span><span class="p">(</span><span class="m">1</span><span class="p">);</span>
+<span class="p">}</span></code></pre></figure>
+
+<figure class="highlight"><pre><code class="language-csharp" data-lang="csharp"><span class="k">finally</span>
+<span class="p">{</span>
+  <span class="n">Interlocked</span><span class="p">.</span><span class="nf">CompareExchange</span><span class="p">(</span><span class="k">ref</span> <span class="n">activeAsyncWorkerThread</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="n">currentThread</span><span class="p">);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>These blocks ensure that there is always only a <strong>single thread</strong> that picks up items from the completion queue.</p>
+
+<p>I assume such an approach dramatically helps with all of kind multi-threading issues that would’ve appeared otherwise. But there do exist at least one case when using just a single thread can lead to deadlocks.</p>
+
+<p>As I mentioned before, the same dedicated completion thread also calls <code class="highlighter-rouge">TryComplete</code> on a result-box and ultimately <code class="highlighter-rouge">TaskCompletionSource</code>. And what happens when <code class="highlighter-rouge">TryComplete</code> is invoked on <code class="highlighter-rouge">TaskCompletionSource</code>? Task continuations, if there are any, are executed, and that’s precisely where the problem hides.</p>
+
+<p>But before we can talk about the actual problem, we need to revisit a couple of C#/CLR features.</p>
+<ol>
+  <li>Even if you don’t have any continuations you added to a task using <code class="highlighter-rouge">ContinueWith</code>, it’s entirely possible that the compiler did it for you. When you call <code class="highlighter-rouge">await</code> on an instance of <code class="highlighter-rouge">Task</code>, the compiler, in fact, assigns the rest of your method after the <code class="highlighter-rouge">await</code> as a continuation for the task.</li>
+  <li>When CLR prepares for continuation execution, it attempts to be smart. It will try its best to execute the continuation on the same thread that completed the task, just because it’s way cheaper performance-wise.
+CLR assumes that it’s safe to use the same thread in default cases: when you don’t have any custom synchronization context (like <code class="highlighter-rouge">AspNetSyncronizationConext</code>) or task scheduler. A small remark here: in ASP.NET applications, when you call <code class="highlighter-rouge">ConfigureAwait(false)</code>, you, in fact, change the current synchronization context to the default one.</li>
+</ol>
+
+<p>So now, when we have all the info, let’s try to complete the puzzle. If you remember, in my code I asynchronously called Redis and awaited the call using <code class="highlighter-rouge">await</code> keyword. When the call completed, the StackExchange completion thread invoked <code class="highlighter-rouge">TryComplete</code> on the task I was awaiting and, as a result, started executing the rest of my method. Let me repeat this, the StackExchange completion thread that is supposed to complete all the active tasks was executing the code of my function that follows the <code class="highlighter-rouge">await</code> statement.
+Unfortunately, after the <code class="highlighter-rouge">await</code> statement, my code called Redis one more time (<code class="highlighter-rouge">_oldClass.SyncOnlyMethod();</code>), and this time it <strong>blocked</strong> on the task instead of awaiting it. So my code blocked the only thread StackExchange can use to complete requests.
+Of course, I have a classic deadlock here. My function is blocked waiting for results of the request to Redis, but it cannot receive the results since the only thread that can deliver them is, in fact, the one that is synchronously waiting right now.</p>
+
+<p>To solve the issue, I had to rewrite my code so that I’m always awaiting Redis calls and not blocking the execution on them. It’s a little bit of pain, no denying it, but (probably, fortunately) I wasn’t able to find any workarounds.</p>
+
+<p>So what are the conclusions?
+Naturally, as the title reads, don’t block on async calls to Redis. It may and will cause deadlocks if you’re currently on the StackExchange completion thread.
+Be mindful of your code that follows asynchronous Redis calls as it’s entirely possible that it will be executed by the StackExchange completion thread. If such code executes some long running tasks, you’re at risk of preventing all the other threads from getting Redis calls completed.</p>
+
+  </div>
+
+  
+
+  <a class="u-url" href="/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html" hidden></a>
+</article>
+
+      </div>
+    </main>
+
+    <footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">nikitozz Blog</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">
+            
+              nikitozz
+            
+            </li>
+            
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+  
+  
+  
+  <li><a href="https://github.com/nikitozz"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">nikitozz</span></a></li>
+  
+  
+  
+  <li><a href="https://www.twitter.com/_nikitozz"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">_nikitozz</span></a></li>
+  
+  
+  
+</ul>
+
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>C#, CLR, .NET, ASP.NET, backend development, technology.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

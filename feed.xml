@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.7.2">Jekyll</generator><link href="https://nikitozz.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://nikitozz.github.io/" rel="alternate" type="text/html" /><updated>2018-02-09T15:00:06-05:00</updated><id>https://nikitozz.github.io/</id><title type="html">nikitozz Blog</title><subtitle>C#, CLR, .NET, ASP.NET, backend development, technology.</subtitle><author><name>nikitozz</name></author><entry><title type="html">Don’t block on async calls to Redis</title><link href="https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html" rel="alternate" type="text/html" title="Don't block on async calls to Redis" /><published>2018-02-08T22:03:00-05:00</published><updated>2018-02-08T22:03:00-05:00</updated><id>https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls</id><content type="html" xml:base="https://nikitozz.github.io/dotnet/redis/2018/02/08/dont-block-on-redis-async-calls.html">&lt;p&gt;The title sounds pretty obvious, doesn’t it? Blocking on any async calls, not only Redis, is wrong for many many reasons. You can find all about it on the Internet (for example, Stephen Cleary has quite a few &lt;a href=&quot;https://blog.stephencleary.com/&quot;&gt;great articles on the topic&lt;/a&gt;), but the most common are:&lt;/p&gt;
+&lt;ol&gt;
+  &lt;li&gt;Blocking defeats the whole purpose of asynchronous programming. We want our threads to be doing stuff, not just waiting for something. This idea is especially actual in today’s cloud-centered world where we have to pay for every minute we use hardware in the cloud.&lt;/li&gt;
+  &lt;li&gt;In some application types, like classic ASP.NET, blocking may lead to deadlocks (again, check out Stephen’s Cleary blog). A quick explanation here: by “classic ASP.NET” I mean the full-framework ASP.NET, not to confuse with the classic pipeline in IIS.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;So, in an ideal world, we want our applications to be asynchronous from top to bottom. That is, coming back to our ASP.NET application example, all the controllers should be asynchronous. Unfortunately, that is not the world we live in. More often than not we have to work with some old legacy code which might not be “fully” asynchronous. Also, sometimes the language itself makes it difficult to be asynchronous from top to bottom. What if let’s say, I need to call something asynchronously in a constructor or a &lt;code class=&quot;highlighter-rouge&quot;&gt;Dispose&lt;/code&gt; method. Of course, we can debate that I should design my code differently so that such a call is not necessary, but again, not an ideal world.&lt;/p&gt;
+
+&lt;p&gt;So this is what happened to me recently. I had to integrate with Redis in some legacy ASP.NET application which was only partially asynchronous, and I used StackExchange.Redis library to connect to my Redis cluster.
+Now, for multiple reasons, I needed to decorate calls to StackExchange.Redis with some functionality. So, to avoid code duplication, I decided to use only async methods from the library, and, consistently, provided only the asynchronous interface in my decorator. Since, as I mentioned above, the code I was working with was not fully asynchronous, the decision was made to carefully block on asynchronous calls to Redis in some rare places where it was necessary.&lt;/p&gt;
+
+&lt;p&gt;Here is how such code could’ve looked like.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-csharp&quot; data-lang=&quot;csharp&quot;&gt;&lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;RedisDecorator&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;async&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Task&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;SaveAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;key&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;value&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// My custom code here&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;await&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_redisDb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;StringSetAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;key&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;value&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;ConfigureAwait&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+  &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;async&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Task&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;ReadAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;key&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// My custom code here&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;await&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_redisDb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;StringGetAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;key&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;ConfigureAwait&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;OldClass&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;readonly&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;RedisDecorator&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_decorator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+  
+  &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;SyncOnlyMethod&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// A lot of old code here&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;_decorator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;SaveAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;someKey&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;someValue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Wait&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;NewClass&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;readonly&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;RedisDecorator&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_decorator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;readonly&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;OldClass&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_oldClass&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+  &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;async&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Task&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;NewMethodAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// Some code&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;await&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_decorator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;SaveAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;key1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;value1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;ConfigureAwait&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    
+    &lt;span class=&quot;c1&quot;&gt;// More code&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;_oldClass&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;SyncOnlyMethod&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Everything was written, verified, and tested locally, it all looked great. But when I deployed my code and started running some load tests, to my genuine surprise the app was stuck somewhere, deadlocked.
+My first reaction was blaming myself for forgetting to add &lt;code class=&quot;highlighter-rouge&quot;&gt;ConfigureAwait&lt;/code&gt; in places where I blocked on async Redis calls (yeah, I’m not a perfect developer). So I went through my code numerous times looking for the missing call, but, hmmm, all of them were in place. As I said, I’m fully aware of why blocking on async calls is wrong (at least I hope I’m) so I was cautious.
+My second thought was, of course, to “blame the compiler.” Well, not the compiler in my case, but the StackExchange library for not calling &lt;code class=&quot;highlighter-rouge&quot;&gt;ConfigureAwait&lt;/code&gt; in some of their async methods. So I dug deeper into their code, realizing again what a great gift GitHub is. But StackExchange did a tremendous job, and all &lt;code class=&quot;highlighter-rouge&quot;&gt;ConfigureAwait&lt;/code&gt;’s seemed to be in place as well.&lt;/p&gt;
+
+&lt;p&gt;With a minimal idea what was going on, I took a memory dump of the process only to unsurprisingly discover that the code was deadlocked precisely at the place where I blocked on an async call to Redis (&lt;code class=&quot;highlighter-rouge&quot;&gt;_decorator.SaveAsync(someKey, someValue).Wait()&lt;/code&gt;). But why?&lt;/p&gt;
+
+&lt;p&gt;I decided to go through the StackExchange source code more thoroughly, and that’s where everything became clear.&lt;/p&gt;
+
+&lt;p&gt;A little disclaimer here: I’m not a Redis expert. Some of the things (or a lot of them) I’m describing here may not be precisely accurate, but the text still should correctly convey the general idea.
+StackExchange.Redis is not exactly a pass-through Redis wrapper. That is, it does not just convert your calls to Redis commands and return results. Instead, it acts as a dispatcher, scheduling your calls for execution, tracking them, and routing the results back.&lt;/p&gt;
+
+&lt;p&gt;Here is what happens when you call, let’s say, &lt;code class=&quot;highlighter-rouge&quot;&gt;StringGetAsync&lt;/code&gt; to read something from Redis.&lt;/p&gt;
+&lt;ol&gt;
+  &lt;li&gt;The library creates an instance of &lt;code class=&quot;highlighter-rouge&quot;&gt;TaskCompletionSource&lt;/code&gt; (a way to track task completion in C#).&lt;/li&gt;
+  &lt;li&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;TaskCompletionSource&lt;/code&gt; is wrapped with a so-called result-box: an internal StackExchange entity that is used to route operation results.&lt;/li&gt;
+  &lt;li&gt;The library creates a message that describes your request (&lt;code class=&quot;highlighter-rouge&quot;&gt;StringGetAsync&lt;/code&gt; in our case) and pushes it to a queue so that it can be delivered to the Redis server.&lt;/li&gt;
+  &lt;li&gt;The library returns you a task associated with the &lt;code class=&quot;highlighter-rouge&quot;&gt;TaskCompletionSource&lt;/code&gt; created in step 1.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;For more details how this process works, see &lt;code class=&quot;highlighter-rouge&quot;&gt;ConnectionMultiplexer.ExecuteAsyncImpl&lt;/code&gt; on &lt;a href=&quot;https://github.com/StackExchange/StackExchange.Redis/blob/master/StackExchange.Redis/StackExchange/Redis/ConnectionMultiplexer.cs#L1951&quot;&gt;GitHub&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;All you have to do right now is to await the &lt;code class=&quot;highlighter-rouge&quot;&gt;Task&lt;/code&gt; you received from the &lt;code class=&quot;highlighter-rouge&quot;&gt;StringGetAsync&lt;/code&gt; call. The piece we’re interested now is how StackExchange.Redis completes the &lt;code class=&quot;highlighter-rouge&quot;&gt;Task&lt;/code&gt; and creates a result for you.&lt;/p&gt;
+
+&lt;p&gt;Here is how it happens:&lt;/p&gt;
+&lt;ol&gt;
+  &lt;li&gt;The library receives a response from the Redis server.&lt;/li&gt;
+  &lt;li&gt;The response is posted to a queue so that it can be processed by a dedicated “completion” thread.&lt;/li&gt;
+  &lt;li&gt;The dedicated completion thread picks up the response from the queue and tries to find a corresponding result-box.&lt;/li&gt;
+  &lt;li&gt;The thread calls TryComplete on the result-box which will ultimately lead to calling &lt;code class=&quot;highlighter-rouge&quot;&gt;TryComplete&lt;/code&gt; on the &lt;code class=&quot;highlighter-rouge&quot;&gt;TaskCompletionSource&lt;/code&gt; that was created at the beginning of your request.&lt;/li&gt;
+  &lt;li&gt;The task you were awaiting is now completed.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Seems innocent, right; nothing that can lead to deadlocks.&lt;/p&gt;
+
+&lt;p&gt;What’s interesting here is that StackExchange.Redis allows only a single thread for picking up items from the completion queue and completing all the result-boxes. Here is how the code looks like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-csharp&quot; data-lang=&quot;csharp&quot;&gt;&lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;ProcessAsyncCompletionQueueImpl&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Environment&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;CurrentManagedThreadId&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;try&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;CompareExchange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;activeAsyncWorkerThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;// if we don't win the lock, check whether there is still work; if there is we&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;// need to retry to prevent a nasty race condition&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;lock&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+          &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Count&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// another thread drained it; can exit&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;n&quot;&gt;Thread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Sleep&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;total&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;do&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;n&quot;&gt;ICompletable&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;next&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;lock&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;next&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Count&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;?&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;null&lt;/span&gt;
+          &lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Dequeue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;next&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;// give it a moment and try again, noting that we might lose the battle&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;// when we pause&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;CompareExchange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;activeAsyncWorkerThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;SpinWait&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;CompareExchange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;activeAsyncWorkerThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+          &lt;span class=&quot;c1&quot;&gt;// we paused, and we got the lock back; anything else?&lt;/span&gt;
+          &lt;span class=&quot;k&quot;&gt;lock&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+          &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;next&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Count&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;?&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;null&lt;/span&gt;
+              &lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Dequeue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+          &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;next&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// nothing to do &amp;lt;===== exit point&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;try&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;multiplexer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Completing async (ordered): &quot;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;next&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;next&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;TryComplete&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Increment&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;completedAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;catch&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Exception&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ex&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;multiplexer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Async completion error: &quot;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ex&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Message&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Increment&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;failedAsync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+      &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;n&quot;&gt;total&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;++;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;multiplexer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Async completion worker processed &quot;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;total&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot; operations&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;finally&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;CompareExchange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;activeAsyncWorkerThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As usually, you can check this code out on &lt;a href=&quot;https://github.com/StackExchange/StackExchange.Redis/blob/master/StackExchange.Redis/StackExchange/Redis/CompletionManager.cs#L114&quot;&gt;GitHub&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;This code does a lot of things, but we’re most interested in these two blocks&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-csharp&quot; data-lang=&quot;csharp&quot;&gt;&lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;CompareExchange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;activeAsyncWorkerThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;// if we don't win the lock, check whether there is still work; if there is we&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;// need to retry to prevent a nasty race condition&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;lock&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;asyncCompletionQueue&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Count&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// another thread drained it; can exit&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;n&quot;&gt;Thread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;Sleep&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-csharp&quot; data-lang=&quot;csharp&quot;&gt;&lt;span class=&quot;k&quot;&gt;finally&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;n&quot;&gt;Interlocked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;CompareExchange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;ref&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;activeAsyncWorkerThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;currentThread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;These blocks ensure that there is always only a &lt;strong&gt;single thread&lt;/strong&gt; that picks up items from the completion queue.&lt;/p&gt;
+
+&lt;p&gt;I assume such an approach dramatically helps with all of kind multi-threading issues that would’ve appeared otherwise. But there do exist at least one case when using just a single thread can lead to deadlocks.&lt;/p&gt;
+
+&lt;p&gt;As I mentioned before, the same dedicated completion thread also calls &lt;code class=&quot;highlighter-rouge&quot;&gt;TryComplete&lt;/code&gt; on a result-box and ultimately &lt;code class=&quot;highlighter-rouge&quot;&gt;TaskCompletionSource&lt;/code&gt;. And what happens when &lt;code class=&quot;highlighter-rouge&quot;&gt;TryComplete&lt;/code&gt; is invoked on &lt;code class=&quot;highlighter-rouge&quot;&gt;TaskCompletionSource&lt;/code&gt;? Task continuations, if there are any, are executed, and that’s precisely where the problem hides.&lt;/p&gt;
+
+&lt;p&gt;But before we can talk about the actual problem, we need to revisit a couple of C#/CLR features.&lt;/p&gt;
+&lt;ol&gt;
+  &lt;li&gt;Even if you don’t have any continuations you added to a task using &lt;code class=&quot;highlighter-rouge&quot;&gt;ContinueWith&lt;/code&gt;, it’s entirely possible that the compiler did it for you. When you call &lt;code class=&quot;highlighter-rouge&quot;&gt;await&lt;/code&gt; on an instance of &lt;code class=&quot;highlighter-rouge&quot;&gt;Task&lt;/code&gt;, the compiler, in fact, assigns the rest of your method after the &lt;code class=&quot;highlighter-rouge&quot;&gt;await&lt;/code&gt; as a continuation for the task.&lt;/li&gt;
+  &lt;li&gt;When CLR prepares for continuation execution, it attempts to be smart. It will try its best to execute the continuation on the same thread that completed the task, just because it’s way cheaper performance-wise.
+CLR assumes that it’s safe to use the same thread in default cases: when you don’t have any custom synchronization context (like &lt;code class=&quot;highlighter-rouge&quot;&gt;AspNetSyncronizationConext&lt;/code&gt;) or task scheduler. A small remark here: in ASP.NET applications, when you call &lt;code class=&quot;highlighter-rouge&quot;&gt;ConfigureAwait(false)&lt;/code&gt;, you, in fact, change the current synchronization context to the default one.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;So now, when we have all the info, let’s try to complete the puzzle. If you remember, in my code I asynchronously called Redis and awaited the call using &lt;code class=&quot;highlighter-rouge&quot;&gt;await&lt;/code&gt; keyword. When the call completed, the StackExchange completion thread invoked &lt;code class=&quot;highlighter-rouge&quot;&gt;TryComplete&lt;/code&gt; on the task I was awaiting and, as a result, started executing the rest of my method. Let me repeat this, the StackExchange completion thread that is supposed to complete all the active tasks was executing the code of my function that follows the &lt;code class=&quot;highlighter-rouge&quot;&gt;await&lt;/code&gt; statement.
+Unfortunately, after the &lt;code class=&quot;highlighter-rouge&quot;&gt;await&lt;/code&gt; statement, my code called Redis one more time (&lt;code class=&quot;highlighter-rouge&quot;&gt;_oldClass.SyncOnlyMethod();&lt;/code&gt;), and this time it &lt;strong&gt;blocked&lt;/strong&gt; on the task instead of awaiting it. So my code blocked the only thread StackExchange can use to complete requests.
+Of course, I have a classic deadlock here. My function is blocked waiting for results of the request to Redis, but it cannot receive the results since the only thread that can deliver them is, in fact, the one that is synchronously waiting right now.&lt;/p&gt;
+
+&lt;p&gt;To solve the issue, I had to rewrite my code so that I’m always awaiting Redis calls and not blocking the execution on them. It’s a little bit of pain, no denying it, but (probably, fortunately) I wasn’t able to find any workarounds.&lt;/p&gt;
+
+&lt;p&gt;So what are the conclusions?
+Naturally, as the title reads, don’t block on async calls to Redis. It may and will cause deadlocks if you’re currently on the StackExchange completion thread.
+Be mindful of your code that follows asynchronous Redis calls as it’s entirely possible that it will be executed by the StackExchange completion thread. If such code executes some long running tasks, you’re at risk of preventing all the other threads from getting Redis calls completed.&lt;/p&gt;</content><author><name>nikitozz</name></author><summary type="html">The title sounds pretty obvious, doesn’t it? Blocking on any async calls, not only Redis, is wrong for many many reasons. You can find all about it on the Internet (for example, Stephen Cleary has quite a few great articles on the topic), but the most common are: Blocking defeats the whole purpose of asynchronous programming. We want our threads to be doing stuff, not just waiting for something. This idea is especially actual in today’s cloud-centered world where we have to pay for every minute we use hardware in the cloud. In some application types, like classic ASP.NET, blocking may lead to deadlocks (again, check out Stephen’s Cleary blog). A quick explanation here: by “classic ASP.NET” I mean the full-framework ASP.NET, not to confuse with the classic pipeline in IIS.</summary></entry></feed>
